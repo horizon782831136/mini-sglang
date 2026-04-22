@@ -33,11 +33,20 @@ class VocabParallelEmbedding(BaseOP):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         from minisgl.kernel import indexing
 
-        y = indexing(
-            weights=self.weight,
-            indices=x,
-            vocab_range=self.vocab_range if self.tp_size > 1 else None,
-        )
+        if self.vocab_range is not None:
+            start, length = self.vocab_range
+            mask = (x >= start) & (x < start + length)
+            clamped = torch.clamp(x - start, 0, length - 1)
+            y = torch.where(mask.unsqueeze(-1), F.embedding(clamped, self.weight), torch.zeros(x.shape[0], self.weight.shape[1], device=self.weight.device, dtype=self.weight.dtype))
+        else:
+            try:
+                y = indexing(
+                    weights=self.weight,
+                    indices=x,
+                    vocab_range=None,
+                )
+            except RuntimeError:
+                y = F.embedding(x, self.weight)
 
         return self._comm.all_reduce(y) if self.tp_size > 1 else y
 

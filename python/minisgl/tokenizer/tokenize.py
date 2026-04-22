@@ -20,6 +20,7 @@ class TokenizeManager:
                     msg.text,
                     tokenize=False,
                     add_generation_prompt=True,
+                    enable_thinking=False,
                 )
                 assert isinstance(prompt, str)
             else:

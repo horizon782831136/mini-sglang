@@ -10,7 +10,7 @@ from typing import Callable, Dict, List, Literal, Tuple
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from minisgl.core import SamplingParams
 from minisgl.env import ENV
 from minisgl.message import (
@@ -152,10 +152,11 @@ class FrontendManager:
 
     async def stream_generate(self, uid: int):
         async for ack in self.wait_for_ack(uid):
-            yield f"data: {ack.incremental_output}\n".encode()
+            chunk = {"text": ack.incremental_output}
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
             if ack.finished:
                 break
-        yield "data: [DONE]\n".encode()
+        yield b"data: [DONE]\n\n"
         logger.debug("Finished streaming response for user %s", uid)
 
     async def stream_chat_completions(self, uid: int):
@@ -173,7 +174,7 @@ class FrontendManager:
                 "object": "text_completion.chunk",
                 "choices": [{"delta": delta, "index": 0, "finish_reason": None}],
             }
-            yield f"data: {json.dumps(chunk)}\n\n".encode()
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
 
             if ack.finished:
                 break
@@ -184,9 +185,18 @@ class FrontendManager:
             "object": "text_completion.chunk",
             "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}],
         }
-        yield f"data: {json.dumps(end_chunk)}\n\n".encode()
+        yield f"data: {json.dumps(end_chunk, ensure_ascii=False)}\n\n".encode()
         yield b"data: [DONE]\n\n"
         logger.debug("Finished streaming response for user %s", uid)
+
+    async def collect_full_output(self, uid: int):
+        """Collect all incremental outputs and return the full text at once (non-streaming)."""
+        full_text = ""
+        async for ack in self.wait_for_ack(uid):
+            full_text += ack.incremental_output
+            if ack.finished:
+                break
+        return full_text
 
     async def stream_with_cancellation(self, generator, request: Request, uid: int):
         try:
@@ -242,10 +252,8 @@ async def generate(req: GenerateRequest, request: Request):
         )
     )
 
-    return StreamingResponse(
-        state.stream_with_cancellation(state.stream_generate(uid), request, uid),
-        media_type="text/event-stream",
-    )
+    full_text = await state.collect_full_output(uid)
+    return JSONResponse({"text": full_text})
 
 
 @app.api_route("/v1", methods=["GET", "POST", "HEAD", "OPTIONS"])
@@ -278,10 +286,26 @@ async def v1_completions(req: OpenAICompletionRequest, request: Request):
         )
     )
 
-    return StreamingResponse(
-        state.stream_with_cancellation(state.stream_chat_completions(uid), request, uid),
-        media_type="text/event-stream",
-    )
+    if req.stream:
+        return StreamingResponse(
+            state.stream_with_cancellation(state.stream_chat_completions(uid), request, uid),
+            media_type="text/event-stream",
+        )
+    else:
+        full_text = await state.collect_full_output(uid)
+        response = {
+            "id": f"cmpl-{uid}",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": full_text},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+        return JSONResponse(response)
 
 
 @app.get("/v1/models")
@@ -375,14 +399,20 @@ async def shell():
                 if need_stop:
                     break
                 msg = chunk.decode()  # type: ignore
-                assert msg.startswith("data: "), msg
-                msg = msg[6:]
-                assert msg.endswith("\n"), msg
-                msg = msg[:-1]
-                if msg == "[DONE]":
-                    continue
-                cur_msg += msg
-                print(msg, end="", flush=True)
+                for line in msg.split("\n"):
+                    line = line.strip()
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        continue
+                    try:
+                        parsed = json.loads(data)
+                        text = parsed.get("text", "")
+                    except json.JSONDecodeError:
+                        text = data
+                    cur_msg += text
+                    print(text, end="", flush=True)
             print("", flush=True)
             history.append((cmd, cur_msg))
     except EOFError:
