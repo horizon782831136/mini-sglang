@@ -123,11 +123,11 @@ self._cos_sin_cache = torch.cat((cos, sin), dim=-1)  # shape: [max_pos, rotary_d
 
 ### I.2.1 Q、K、V 的来源与含义
 
-给定输入序列 $X \in \mathbb{R}^{n \times d_{model}}$（$n$ 个 token，每个 $d_{model}$ 维），通过三个线性变换得到：
+给定输入序列 $X$，形状为 $(n, d_{model})$（$n$ 个 token，每个 $d_{model}$ 维），通过三个线性变换得到：
 
 $$Q = X W_Q, \quad K = X W_K, \quad V = X W_V$$
 
-其中 $W_Q, W_K \in \mathbb{R}^{d_{model} \times d_k}$，$W_V \in \mathbb{R}^{d_{model} \times d_v}$。
+其中 $W_Q$ 和 $W_K$ 的形状为 $(d_{model}, d_k)$，$W_V$ 的形状为 $(d_{model}, d_v)$。
 
 - **Q（Query，查询）**：当前 token 想要查询什么信息，可以理解为"我现在想问什么问题"。
 - **K（Key，键）**：每个 token 向外暴露的"标签"或"索引"，可以理解为"我这个 token 有什么标签，方便别人找到我"。
@@ -141,11 +141,11 @@ $$\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^T}{\sqrt{d_k}}\righ
 
 **步骤分解：**
 
-1. **计算注意力分数矩阵**：$S = QK^T \in \mathbb{R}^{n \times n}$，$S_{ij}$ 表示位置 $i$ 的 Query 和位置 $j$ 的 Key 的相似度。
+1. **计算注意力分数矩阵**：$S = QK^T$（形状 $(n, n)$），$S_{ij}$ 表示位置 $i$ 的 Query 和位置 $j$ 的 Key 的相似度。
 2. **缩放**：除以 $\sqrt{d_k}$。原因：当 $d_k$ 较大时，内积的方差会随 $d_k$ 线性增大，导致 softmax 梯度极小（"饱和"区域）。除以 $\sqrt{d_k}$ 将方差控制在 1 附近。
 3. **Causal Mask**（自回归生成时必须）：将 $S$ 的上三角部分（未来位置）设为 $-\infty$，softmax 后这些位置的权重变为 0，保证位置 $i$ 只能关注位置 $\leq i$ 的 token。
-4. **Softmax**：$A = \text{softmax}(S) \in \mathbb{R}^{n \times n}$，将每行归一化为概率分布（各行加和为 1）。
-5. **加权求和**：$O = AV \in \mathbb{R}^{n \times d_v}$，对所有 Value 按注意力权重做加权平均，得到每个 token 的输出表示。
+4. **Softmax**：$A = \text{softmax}(S)$（形状 $(n, n)$），将每行归一化为概率分布（各行加和为 1）。
+5. **加权求和**：$O = AV$（形状 $(n, d_v)$），对所有 Value 按注意力权重做加权平均，得到每个 token 的输出表示。
 
 ### I.2.3 Multi-Head Attention：为什么要多头
 
@@ -197,7 +197,7 @@ KV Cache 的显存开销正比于 **KV 头数**。以 Llama3-70B 为例（32 个
 
 ### I.2.5 传统实现的显存瓶颈
 
-传统注意力实现需要将完整的注意力矩阵 $A \in \mathbb{R}^{n \times n}$ **显式存储在显存（HBM）中**。
+传统注意力实现需要将完整的注意力矩阵 $A$（形状 $(n, n)$）**显式存储在显存（HBM）中**。
 
 **以具体数字量化：**
 
@@ -207,7 +207,7 @@ KV Cache 的显存开销正比于 **KV 头数**。以 Llama3-70B 为例（32 个
 
 单次前向传播中，注意力矩阵的显存占用：
 
-$$4096 \times 4096 \times 32 \times 2\,\text{字节} = 4096^2 \times 64\,\text{字节} \approx 1.07\,\text{GB}$$
+$$4096 \times 4096 \times 32 \times 2 = 4096^2 \times 64 \approx 1.07 \times 10^9\ \text{bytes} \approx 1.07\ \text{GB}$$
 
 反向传播时还需保存这个矩阵用于梯度计算，总占用翻倍到约 **2 GB**，而且这只是注意力矩阵，尚未计算 Q、K、V 等中间激活。
 
@@ -342,7 +342,7 @@ SRAM 的带宽比 HBM **快约 10 倍**，但容量只有 HBM 的几十万分之
 
 ### I.4.2 FlashAttention v1：分块计算 + Online Softmax
 
-FlashAttention（Dao et al., 2022）的核心洞察：**$Q$、$K$、$V$ 可以分块加载到 SRAM 中计算，只要能正确地增量计算 softmax**。
+FlashAttention（Dao et al., 2022）的核心洞察：**$Q$, $K$, $V$ 可以分块加载到 SRAM 中计算，只要能正确地增量计算 softmax**。
 
 **Online Softmax（增量 Softmax）推导：**
 
@@ -379,7 +379,7 @@ $$\ell^{(k+1)} = e^{m^{(k)} - m^{(k+1)}} \cdot \ell^{(k)} + \sum_j e^{x_{k+j} - 
   写出 O_i 到 HBM
 ```
 
-这样，注意力矩阵 $S$ 和 $A$ **永远不需要写回 HBM**，而是在 SRAM 内计算完就丢弃，IO 复杂度从 $O(n^2)$ 降为 $O(n)$（只读写 $Q$、$K$、$V$、$O$）。
+这样，注意力矩阵 $S$ 和 $A$ **永远不需要写回 HBM**，而是在 SRAM 内计算完就丢弃，IO 复杂度从 $O(n^2)$ 降为 $O(n)$（只读写 $Q$, $K$, $V$, $O$）。
 
 **显存节省：** FlashAttention 不存储 $O(n^2)$ 的注意力矩阵，只存储每个 Q 块的 $m$（最大值）和 $\ell$（归一化因子），共 $O(n)$ 额外存储。
 
