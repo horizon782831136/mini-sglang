@@ -296,11 +296,15 @@ LLM 推理分为两个截然不同的阶段：
 
 KV Cache 的显存占用为：
 
-$$\text{显存} = 2 \times n_{layers} \times n_{kv\_heads} \times d_{head} \times \text{max\_seq\_len} \times \text{bytes\_per\_element}$$
+$$\text{Memory} = 2 \times N_{layers} \times H_{kv} \times d_{head} \times S_{max} \times B$$
 
-以 Llama3-8B（32 层，8 KV 头，head_dim=128，float16，max_seq_len=8192）为例：
+其中 $N_{layers}$ 为层数，$H_{kv}$ 为 KV 头数，$d_{head}$ 为每头维度，$S_{max}$ 为最大序列长度，$B$ 为每元素字节数（float16 = 2）。
 
-$$2 \times 32 \times 8 \times 128 \times 8192 \times 2 = 1,073,741,824 \approx 1\,\text{GB（单请求）}$$
+以 Llama3-8B（32 层，8 KV 头，head\_dim=128，float16，max\_seq\_len=8192）为例：
+
+$$2 \times 32 \times 8 \times 128 \times 8192 \times 2 = 1{,}073{,}741{,}824 \approx 1\ \text{GB}$$
+
+即单个请求占用约 1 GB 显存。
 
 同时处理 100 个请求就需要 100 GB，远超单 GPU 显存。
 
