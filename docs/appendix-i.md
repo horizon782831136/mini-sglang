@@ -282,13 +282,13 @@ LLM 推理分为两个截然不同的阶段：
 - 输入：完整的提示词序列（可能有几百到几千个 token）
 - 计算：一次性处理所有输入 token，计算并存储它们的 K、V
 - 特点：矩阵乘法密集（compute-bound），GPU 计算单元是瓶颈
-- 注意力形状：$Q \in \mathbb{R}^{n \times h \times d_k}$，$K/V \in \mathbb{R}^{n \times h \times d_k}$，$n$ 可能很大
+- 注意力形状：Q、K、V 的形状均为 $(n,\ h,\ d_k)$，$n$ 可能达数千
 
 **Decode（解码）阶段：**
 - 输入：每次只有 1 个新 token
 - 计算：新 token 的 Q 与缓存中所有 K、V 做注意力
 - 特点：内存带宽密集（memory-bound），主要瓶颈是从 HBM 读取 KV Cache
-- 注意力形状：$Q \in \mathbb{R}^{1 \times h \times d_k}$，$K/V \in \mathbb{R}^{n \times h \times d_k}$，矩阵乘变成矩阵-向量乘
+- 注意力形状：Q 的形状为 $(1,\ h,\ d_k)$，K/V 形状为 $(t,\ h,\ d_k)$（$t$ 为已缓存序列长度），矩阵乘退化为矩阵-向量乘
 
 这两种阶段的计算特性完全不同，这正是 mini-sglang 使用不同注意力后端的根本原因（见 I.6 节）。
 
